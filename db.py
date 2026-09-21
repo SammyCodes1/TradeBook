@@ -1,8 +1,11 @@
 """Supabase database operations for TradeBook via REST API."""
 
+import logging
 from datetime import datetime
 import httpx
-from config import SUPABASE_URL, SUPABASE_SECRET_KEY
+from config import SUPABASE_URL, SUPABASE_SECRET_KEY, TELEGRAM_BOT_TOKEN
+
+logger = logging.getLogger(__name__)
 
 BASE = f"{SUPABASE_URL}/rest/v1"
 HEADERS = {
@@ -117,3 +120,84 @@ def delete_entry(entry_id: int, trader_id: int) -> None:
         headers=headers,
     )
     response.raise_for_status()
+
+
+def save_receipt_photo(
+    trader_id: int,
+    update_id: int,
+    entry_id: int,
+    photo_list: list,
+) -> bool:
+    """Download largest receipt photo from Telegram and upload to Supabase Storage."""
+    if not photo_list or not isinstance(photo_list, list):
+        return False
+
+    largest = photo_list[-1]
+    if not isinstance(largest, dict):
+        return False
+
+    file_id = largest.get("file_id")
+    file_size = largest.get("file_size")
+
+    if not file_id:
+        return False
+
+    # Step 1: Skip photo if over 5,000,000 bytes
+    if file_size is not None and file_size > 5_000_000:
+        return False
+
+    try:
+        # Step 2: Get file path from Telegram
+        resp_file = _client.get(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getFile",
+            params={"file_id": file_id},
+        )
+        resp_file.raise_for_status()
+        file_info = resp_file.json()
+        if not file_info.get("ok"):
+            return False
+
+        file_path = file_info.get("result", {}).get("file_path")
+        if not file_path:
+            return False
+
+        # Step 3: Download photo bytes from Telegram
+        resp_bytes = _client.get(
+            f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
+        )
+        resp_bytes.raise_for_status()
+        photo_bytes = resp_bytes.content
+        if len(photo_bytes) > 5_000_000:
+            return False
+
+        # Step 4: Upload to Supabase Storage
+        storage_url = f"{SUPABASE_URL}/storage/v1/object/receipts/{trader_id}/{update_id}.jpg"
+        upload_headers = {
+            "apikey": SUPABASE_SECRET_KEY,
+            "Content-Type": "image/jpeg",
+        }
+        resp_upload = _client.post(
+            storage_url,
+            content=photo_bytes,
+            headers=upload_headers,
+        )
+        resp_upload.raise_for_status()
+
+        # Step 5: Patch entries table with receipt_path
+        receipt_path = f"{trader_id}/{update_id}.jpg"
+        resp_patch = _client.patch(
+            f"{BASE}/entries",
+            params={"id": f"eq.{entry_id}"},
+            json={"receipt_path": receipt_path},
+            headers=HEADERS,
+        )
+        resp_patch.raise_for_status()
+        return True
+
+    except httpx.HTTPStatusError as exc:
+        logger.error("Receipt photo HTTP error: status=%s", exc.response.status_code)
+        return False
+    except Exception:
+        logger.error("Receipt photo processing error")
+        return False
+

@@ -57,8 +57,19 @@ def webhook(
 
         update_id = update.get("update_id", 0)
 
-        # Require text in the message
+        photo_list = message.get("photo")
         text = message.get("text")
+
+        if photo_list:
+            caption = message.get("caption")
+            if not caption:
+                telegram_api.send_message(
+                    chat_id, "Add a caption like: sold 3 rice 15000"
+                )
+                return {"ok": True}
+            text = caption
+
+        # Require text in the message
         if not text:
             telegram_api.send_message(
                 chat_id, "Please send text like: sold 3 rice 15000"
@@ -66,7 +77,9 @@ def webhook(
             return {"ok": True}
 
         # Process text and send reply
-        reply = handlers.handle_text(trader_id, update_id, text)
+        reply = handlers.handle_text(
+            trader_id, update_id, text, photo_list=photo_list
+        )
         if reply is not None:
             telegram_api.send_message(chat_id, reply)
 

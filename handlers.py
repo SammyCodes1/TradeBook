@@ -34,7 +34,12 @@ def describe(entry: dict) -> str:
     return f"{kind}: {fmt_num(qty)} {item} = {money(amount)}"
 
 
-def handle_text(trader_id: int, update_id: int, text: str) -> str | None:
+def handle_text(
+    trader_id: int,
+    update_id: int,
+    text: str,
+    photo_list: list | None = None,
+) -> str | None:
     """Process incoming text message from a trader and return the reply text."""
     parsed = parsing.parse_message(text)
 
@@ -60,7 +65,13 @@ def handle_text(trader_id: int, update_id: int, text: str) -> str | None:
         )
         if row is None:
             return None
-        return "Recorded " + describe(row)
+        reply = "Recorded " + describe(row)
+        if photo_list:
+            if db.save_receipt_photo(trader_id, update_id, row["id"], photo_list):
+                reply += " (receipt saved)"
+            else:
+                reply += " (photo not saved)"
+        return reply
 
     if parsed.cmd == "undo":
         entry = db.get_last_entry(trader_id)
